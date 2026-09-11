@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "name": "opencode-env-working-example",
+  "description": "Profiles and source catalogs used by the opencode-env generator.",
+  "source": {
+    "agents": "catalog/.opencode/agents",
+    "commands": "catalog/.opencode/command",
+    "skills": "catalog/.opencode/skills"
+  },
+  "agents": ["build", "plan", "explore", "architect", "backend", "frontend", "tester", "reviewer", "security", "docs"],
+  "skills": ["opencode-model-discovery-windows", "opencode-agent-model-tuning", "security-review", "spring-boot-java", "postgres-h2-testing", "react-vite", "playwright-e2e"],
+  "commands": ["plan", "review", "test", "e2e"],
+  "rules": [
+    "Keep generated project configuration portable; do not add machine-specific absolute paths."
+  ],
+  "settings": {
+    "share": "manual",
+    "autoupdate": "notify"
+  },
+  "requiredFiles": ["AGENTS.md", "TASK_STATE.md"],
+  "requiredSkills": ["opencode-model-discovery-windows", "opencode-agent-model-tuning"],
+  "compaction": { "auto": true, "prune": true, "reserved": 10000 },
+  "mcp": {
+    "context7": { "description": "Актуальная документация через Context7", "config": { "type": "remote", "url": "https://mcp.context7.com/mcp", "enabled": true } },
+    "playwright": { "description": "Локальная браузерная проверка через Playwright", "config": { "type": "local", "command": ["npx", "-y", "@playwright/mcp@latest"], "enabled": true } }
+  },
+  "presets": {
+    "backend": { "agents": ["build", "plan", "explore", "reviewer", "security", "docs"], "skills": ["opencode-model-discovery-windows", "opencode-agent-model-tuning", "security-review"], "commands": ["plan", "review", "test"], "mcp": ["context7"] },
+    "frontend": { "agents": ["build", "plan", "explore", "reviewer", "security", "docs"], "skills": ["opencode-model-discovery-windows", "opencode-agent-model-tuning", "security-review", "playwright-e2e"], "commands": ["plan", "review", "test", "e2e"], "mcp": ["context7", "playwright"] },
+    "universal": { "agents": ["build", "plan", "explore", "reviewer", "security", "docs"], "skills": ["opencode-model-discovery-windows", "opencode-agent-model-tuning", "security-review"], "commands": ["plan", "review", "test"], "mcp": ["context7"] }
+  },
+  "policy": {
+    "neverCopy": [".env", ".env.*", "*credentials*", "*password*", "*secret*", "*.pem", "*.key"],
+    "overwriteRequiresForce": true
+  }
+}

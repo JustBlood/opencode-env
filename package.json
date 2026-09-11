@@ -1,0 +1,22 @@
+{
+  "name": "opencode-env",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "opencode-env": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "build:exe": "npm run build && node scripts/build-exe.mjs",
+    "dev": "tsx src/cli.ts",
+    "test": "npm run build && node --test"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@yao-pkg/pkg": "^6.10.1",
+    "esbuild": "^0.25.12",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}
