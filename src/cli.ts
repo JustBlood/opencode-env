@@ -147,7 +147,10 @@ function runOpenCodeAnalysis(project: string, prompt: string): string {
 function validateGeneratedText(text: string, label: string): void {
   if (!text.trim()) throw new Error(`OpenCode returned an empty ${label}.`);
   if (text.length > 30000) throw new Error(`Generated ${label} is too large; no files were generated.`);
-  if (/(api[_-]?key|access[_-]?token|password|private[_-]?key|BEGIN [A-Z ]+ KEY)/i.test(text)) throw new Error(`Generated ${label} appears to contain secret-like data; no files were generated.`);
+  const secretValue = /(?:api[_-]?key|access[_-]?token|password|private[_-]?key|client[_-]?secret)\s*[:=]\s*["']?[^\s"']{8,}/i;
+  const keyBlock = /-----BEGIN [A-Z ]+ PRIVATE KEY-----/i;
+  const knownToken = /\b(?:sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9_]{20,})\b/;
+  if (secretValue.test(text) || keyBlock.test(text) || knownToken.test(text)) throw new Error(`Generated ${label} appears to contain secret-like data; no files were generated.`);
 }
 
 function extractSection(text: string, start: string, end: string): string {
@@ -265,12 +268,13 @@ async function init(project: string, args: string[]): Promise<void> {
   const existing = [join(project, "AGENTS.md"), join(project, "opencode.json"), join(project, "TASK_STATE.md")].filter(existsSync);
   if (existing.length && !force && !dryRun) throw new Error(`Refusing to overwrite: ${existing.join(", ")}. Review and use --force.`);
   const write = (path: string, content: string) => { if (dryRun) console.log(`[dry-run] generate ${path}`); else { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, content); } };
+  if (!dryRun) console.log("Discovering available OpenCode models...");
   const availableModels = dryRun ? [] : await discoverModelsWithInstall();
   const modelByAgent = Object.fromEntries(selectedAgents.map((agent) => [agent, chooseModel(agent, availableModels)]));
   let projectFacts = "";
   let generatedBrief = "";
   const needsAi = agentsSource === "generate with OpenCode" || briefSource === "generate with OpenCode";
-  if (needsAi && !dryRun) { const generated = generateProjectDocuments(project, agentsSource === "generate with OpenCode" && briefSource === "generate with OpenCode" ? "both" : agentsSource === "generate with OpenCode" ? "agents" : "brief"); projectFacts = generated.agents ?? ""; generatedBrief = generated.brief ?? ""; }
+  if (needsAi && !dryRun) { console.log("Analyzing the project with OpenCode (read-only)..."); const generated = generateProjectDocuments(project, agentsSource === "generate with OpenCode" && briefSource === "generate with OpenCode" ? "both" : agentsSource === "generate with OpenCode" ? "agents" : "brief"); projectFacts = generated.agents ?? ""; generatedBrief = generated.brief ?? ""; }
   const agentsContent = agentsSource === "use existing AGENTS.md" ? readFileSync(join(project, "AGENTS.md"), "utf8") : generatedInstructions(chosenPreset, brief, catalog.rules, projectFacts);
   const briefContent = briefSource === "use existing project brief" ? readFileSync(resolve(arg(args, "--brief") ?? existingBriefPath!), "utf8") : briefSource === "generate with OpenCode" ? generatedBrief : briefSource === "use template" ? "# Project brief\n\n## Product\n\n## Stack\n\n## Verification\n\n## Constraints\n" : "";
   if (flag(args, "--reinit-delete") && existsSync(join(project, ".opencode")) && !dryRun) rmSync(join(project, ".opencode"), { recursive: true, force: true });
