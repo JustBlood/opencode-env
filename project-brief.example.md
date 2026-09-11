@@ -1,17 +1,17 @@
-# Project brief
+# Краткое описание проекта
 
-## Product
+## Продукт
 
 What does the project do?
 
-## Stack
+## Технологический стек
 
 Languages, frameworks, databases, package managers, and deployment targets.
 
-## Verification
+## Проверка
 
 Exact commands for build, lint, tests, local services, and E2E.
 
-## Constraints
+## Ограничения
 
 Security, data handling, compatibility, performance, or approval constraints.

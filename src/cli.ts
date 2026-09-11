@@ -65,8 +65,8 @@ function normalizeDocumentSource(value: string, kind: "agents" | "brief"): strin
     generate: "generate with OpenCode", existing: kind === "agents" ? "use existing AGENTS.md" : "use existing project brief",
     template: kind === "agents" ? "use base template" : "use template", skip: "do not create brief",
     "сгенерировать через OpenCode": "generate with OpenCode", "использовать существующий AGENTS.md": "use existing AGENTS.md",
-    "использовать существующий project brief": "use existing project brief", "использовать базовый шаблон": "use base template",
-    "использовать шаблон": "use template", "не создавать project brief": "do not create brief",
+    "использовать существующий project brief": "use existing project brief", "использовать существующее описание проекта": "use existing project brief", "использовать базовый шаблон": "use base template",
+    "использовать шаблон": "use template", "не создавать project brief": "do not create brief", "не создавать описание проекта": "do not create brief",
   };
   return aliases[value] ?? value;
 }
@@ -291,13 +291,12 @@ async function init(project: string, args: string[]): Promise<void> {
   const existingAgents = existsSync(join(project, "AGENTS.md"));
   const existingBriefPath = ["project-brief.md", "PROJECT_BRIEF.md", join("docs", "project-brief.md")].map((name) => join(project, name)).find(existsSync);
   const agentsSource = normalizeDocumentSource(arg(args, "--agents-source") ?? (customize ? await askChoice("Источник AGENTS.md:", ["сгенерировать через OpenCode", "использовать существующий AGENTS.md", "использовать базовый шаблон"]) : "template"), "agents");
-  const briefSource = normalizeDocumentSource(arg(args, "--brief-source") ?? (customize ? await askChoice("Источник project brief:", ["сгенерировать через OpenCode", "использовать существующий project brief", "использовать шаблон", "не создавать project brief"]) : (arg(args, "--brief") ? "use existing project brief" : "do not create brief")), "brief");
+  const briefSource = normalizeDocumentSource(arg(args, "--brief-source") ?? (customize ? await askChoice("Краткое описание проекта:", ["сгенерировать через OpenCode", "использовать существующее описание проекта", "использовать шаблон", "не создавать описание проекта"]) : (arg(args, "--brief") ? "use existing project brief" : "do not create brief")), "brief");
   if (agentsSource === "use existing AGENTS.md" && !existingAgents) throw new Error("No existing AGENTS.md was found.");
   if (briefSource === "use existing project brief" && !arg(args, "--brief") && !existingBriefPath) throw new Error("No existing project brief was found.");
   const existing = [join(project, "AGENTS.md"), join(project, "opencode.json"), join(project, "TASK_STATE.md")].filter(existsSync);
   if (existing.length && !force && !dryRun) throw new Error(`Refusing to overwrite: ${existing.join(", ")}. Review and use --force.`);
   const write = (path: string, content: string) => { if (dryRun) console.log(`[dry-run] generate ${path}`); else { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, content); } };
-  if (!dryRun) console.log("Discovering available OpenCode models...");
   const availableModels = dryRun ? [] : await discoverModelsWithInstall();
   const modelByAgent = Object.fromEntries(selectedAgents.map((agent) => [agent, chooseModel(agent, availableModels)]));
   let projectFacts = "";
@@ -305,7 +304,7 @@ async function init(project: string, args: string[]): Promise<void> {
   const needsAi = agentsSource === "generate with OpenCode" || briefSource === "generate with OpenCode";
   if (needsAi && !dryRun) { console.log("Анализ проекта через OpenCode в режиме только чтения..."); const generated = await generateProjectDocuments(project, agentsSource === "generate with OpenCode" && briefSource === "generate with OpenCode" ? "both" : agentsSource === "generate with OpenCode" ? "agents" : "brief"); projectFacts = generated.agents ?? ""; generatedBrief = generated.brief ?? ""; }
   const agentsContent = agentsSource === "use existing AGENTS.md" ? readFileSync(join(project, "AGENTS.md"), "utf8") : generatedInstructions(chosenPreset, brief, catalog.rules, projectFacts);
-  const briefContent = briefSource === "use existing project brief" ? readFileSync(resolve(arg(args, "--brief") ?? existingBriefPath!), "utf8") : briefSource === "generate with OpenCode" ? generatedBrief : briefSource === "use template" ? "# Project brief\n\n## Product\n\n## Stack\n\n## Verification\n\n## Constraints\n" : "";
+  const briefContent = briefSource === "use existing project brief" ? readFileSync(resolve(arg(args, "--brief") ?? existingBriefPath!), "utf8") : briefSource === "generate with OpenCode" ? generatedBrief : briefSource === "use template" ? "# Краткое описание проекта\n\n## Продукт\n\n## Стек\n\n## Проверка\n\n## Ограничения\n" : "";
   if (flag(args, "--reinit-delete") && existsSync(join(project, ".opencode")) && !dryRun) rmSync(join(project, ".opencode"), { recursive: true, force: true });
   if (agentsSource !== "use existing AGENTS.md") write(join(project, "AGENTS.md"), agentsContent);
   if (briefContent && briefSource !== "use existing project brief") write(join(project, "project-brief.md"), briefContent);
@@ -434,9 +433,9 @@ Init options:
   --skills LIST    Comma-separated skill names
   --mcp LIST       Comma-separated MCP names
   --commands LIST  Comma-separated command names
-  --brief FILE     Project brief file
-  --agents-source  generate, existing, or template
-  --brief-source   generate, existing, template, or skip
+  --brief FILE     Файл с кратким описанием проекта
+  --agents-source  сгенерировать, существующий файл или шаблон
+  --brief-source   сгенерировать, существующий файл, шаблон или пропустить
   --project DIR    Target directory
   --dry-run        Preview without writing files
   --force          Allow replacing AGENTS.md and opencode.json`);
