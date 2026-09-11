@@ -2,7 +2,7 @@
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { embeddedFiles } from "./embeddedCatalog.js";
@@ -61,7 +61,13 @@ function assertKnown(selected: string[], available: string[], category: string):
   if (selected.some((name) => !/^[a-zA-Z0-9._-]+$/.test(name))) throw new Error(`Unsafe ${category} name.`);
 }
 function normalizeDocumentSource(value: string, kind: "agents" | "brief"): string {
-  const aliases: Record<string, string> = { generate: "generate with OpenCode", existing: kind === "agents" ? "use existing AGENTS.md" : "use existing project brief", template: kind === "agents" ? "use base template" : "use template", skip: "do not create brief" };
+  const aliases: Record<string, string> = {
+    generate: "generate with OpenCode", existing: kind === "agents" ? "use existing AGENTS.md" : "use existing project brief",
+    template: kind === "agents" ? "use base template" : "use template", skip: "do not create brief",
+    "сгенерировать через OpenCode": "generate with OpenCode", "использовать существующий AGENTS.md": "use existing AGENTS.md",
+    "использовать существующий project brief": "use existing project brief", "использовать базовый шаблон": "use base template",
+    "использовать шаблон": "use template", "не создавать project brief": "do not create brief",
+  };
   return aliases[value] ?? value;
 }
 
@@ -96,7 +102,7 @@ function normalizePreset(value: string): Preset {
 async function selectMany(rl: ReturnType<typeof createInterface>, title: string, values: string[], defaults: string[]): Promise<string[]> {
   console.log(`\n${title}`);
   values.forEach((value, index) => console.log(`  ${index + 1}. ${value}${defaults.includes(value) ? " [по умолчанию]" : ""}`));
-  const answer = await rl.question("Введите номера через запятую, Enter — defaults, 0 — ничего: ");
+  const answer = await rl.question("Введите номера через запятую, Enter — варианты по умолчанию, 0 — ничего: ");
   if (!answer.trim()) return defaults;
   if (answer.trim() === "0") return [];
   return answer.split(",").map((value) => values[Number(value.trim()) - 1]).filter(Boolean);
@@ -104,8 +110,9 @@ async function selectMany(rl: ReturnType<typeof createInterface>, title: string,
 
 async function askChoice(title: string, choices: string[]): Promise<string> {
   const rl = createInterface({ input, output });
+  console.log(`\n${title}`);
   choices.forEach((choice, index) => console.log(`  ${index + 1}. ${choice}`));
-  const answer = await rl.question(`${title} `);
+  const answer = await rl.question("Введите номер: ");
   rl.close();
   const selected = choices[Number(answer.trim()) - 1];
   if (!selected) throw new Error("Invalid selection.");
@@ -116,23 +123,45 @@ function sanitizeAgent(content: string): string {
   return content.split("\n").filter((line) => !/^\s*model:\s*/i.test(line) && !/^[ \t]+["']?[A-Z]:\\Users\\/i.test(line)).join("\n");
 }
 
-function runOpenCode(args: string[]): ReturnType<typeof spawnSync> {
+function runProcess(executable: string, args: string[], options: { cwd?: string; shell?: boolean; input?: string } = {}): Promise<{ status: number | null; stdout: string; stderr: string; error?: Error }> {
+  return new Promise((resolveProcess) => {
+    const child = spawn(executable, args, { cwd: options.cwd, shell: options.shell, windowsHide: true });
+    let stdout = "";
+    let stderr = "";
+    child.stdout?.on("data", (chunk) => { stdout += chunk.toString(); });
+    child.stderr?.on("data", (chunk) => { stderr += chunk.toString(); });
+    child.on("error", (error) => resolveProcess({ status: null, stdout, stderr, error }));
+    child.on("close", (status) => resolveProcess({ status, stdout, stderr }));
+    if (options.input !== undefined) child.stdin?.end(options.input);
+  });
+}
+
+async function withSpinner<T>(message: string, action: () => Promise<T>): Promise<T> {
+  if (!output.isTTY) return action();
+  let step = 1;
+  const render = () => { output.write(`\r${message}${".".repeat(step)}   `); step = step === 3 ? 1 : step + 1; };
+  render();
+  const timer = setInterval(render, 450);
+  try { return await action(); } finally { clearInterval(timer); output.write(`\r${" ".repeat(message.length + 5)}\r`); }
+}
+
+async function runOpenCode(args: string[]): Promise<{ status: number | null; stdout: string; stderr: string; error?: Error }> {
   if (hasOpenCode()) {
     const executable = process.platform === "win32" ? "opencode.cmd" : "opencode";
-    return spawnSync(executable, args, { encoding: "utf8", windowsHide: true, shell: process.platform === "win32" });
+    return runProcess(executable, args, { shell: process.platform === "win32" });
   }
   if (hasWslOpenCode()) {
     const command = `opencode ${args.map((value) => `'${value.replaceAll("'", "'\\''")}'`).join(" ")}`;
-    return spawnSync("wsl.exe", ["sh", "-lc", command], { encoding: "utf8", windowsHide: true });
+    return runProcess("wsl.exe", ["sh", "-lc", command]);
   }
-  return { status: 127, stdout: "", stderr: "OpenCode was not found in Windows PATH or WSL." } as ReturnType<typeof spawnSync>;
+  return { status: 127, stdout: "", stderr: "OpenCode не найден в Windows PATH или WSL." };
 }
 
-function runOpenCodeAnalysis(project: string, prompt: string): string {
+async function runOpenCodeAnalysis(project: string, prompt: string): Promise<string> {
   const args = ["run", "--agent", "plan", "--format", "json"];
   const result = hasOpenCode()
-    ? spawnSync("opencode.cmd", args, { cwd: project, input: prompt, encoding: "utf8", windowsHide: true, shell: true })
-    : spawnSync("wsl.exe", ["--cd", project, "--", "opencode", ...args], { cwd: project, input: prompt, encoding: "utf8", windowsHide: true });
+    ? await runProcess("opencode.cmd", args, { cwd: project, input: prompt, shell: true })
+    : await runProcess("wsl.exe", ["--cd", project, "--", "opencode", ...args], { cwd: project, input: prompt });
   if (result.error || result.status !== 0) throw new Error(`OpenCode project analysis failed. ${result.stderr ?? result.error?.message ?? ""}`.trim());
   const lines = `${result.stdout ?? ""}`.split(/\r?\n/).filter(Boolean);
   const text = lines.flatMap((line) => {
@@ -159,9 +188,9 @@ function extractSection(text: string, start: string, end: string): string {
   return from >= 0 && to >= 0 ? text.slice(from + start.length, to).trim() : "";
 }
 
-function generateProjectDocuments(project: string, requested: "agents" | "brief" | "both"): { agents?: string; brief?: string } {
+async function generateProjectDocuments(project: string, requested: "agents" | "brief" | "both"): Promise<{ agents?: string; brief?: string }> {
   const prompt = `Analyze the project in the current directory in read-only mode. Do not edit, create, delete, or rename files. Do not read or output .env files, credentials, tokens, passwords, private keys, or production configuration. Do not include absolute machine-specific paths. Separate confirmed facts from unknowns. Return exactly these delimiter sections and no other commentary:\n===PROJECT_BRIEF===\nMarkdown project brief with Product, Stack, Verification, Constraints, Important files, and Unknowns.\n===AGENTS_FACTS===\nPortable project facts and verification instructions for AGENTS.md. Never weaken safety rules.\n===END===`;
-  const output = runOpenCodeAnalysis(project, prompt);
+  const output = await withSpinner("Генерация описаний проекта через OpenCode", () => runOpenCodeAnalysis(project, prompt));
   const brief = requested === "agents" ? undefined : extractSection(output, "===PROJECT_BRIEF===", "===AGENTS_FACTS===");
   const agents = requested === "brief" ? undefined : extractSection(output, "===AGENTS_FACTS===", "===END===");
   if (brief !== undefined) validateGeneratedText(brief, "project brief");
@@ -169,9 +198,9 @@ function generateProjectDocuments(project: string, requested: "agents" | "brief"
   return { brief, agents };
 }
 
-function discoverModels(): string[] {
-  runOpenCode(["models", "--refresh"]);
-  const result = runOpenCode(["models"]);
+async function discoverModels(): Promise<string[]> {
+  await withSpinner("Поиск доступных моделей OpenCode", () => runOpenCode(["models", "--refresh"]));
+  const result = await withSpinner("Получение списка моделей", () => runOpenCode(["models"]));
   if (result.error || result.status !== 0) throw new Error(`Unable to run OpenCode model discovery. Ensure OpenCode is installed and configured, then retry. ${result.stderr ?? result.error?.message ?? ""}`.trim());
   const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "");
   const models = [...new Set(output.split(/\r?\n/).map((line) => line.trim()).filter((line) => /^[a-zA-Z0-9._-]+\/[a-zA-Z0-9._:-]+$/.test(line)))];
@@ -193,15 +222,15 @@ function hasWslOpenCode(): boolean {
 
 async function discoverModelsWithInstall(): Promise<string[]> {
   if (!hasOpenCode() && !hasWslOpenCode()) {
-    console.log("OpenCode was not found in Windows PATH or WSL.");
-    if (!input.isTTY || !(await askYes("Install OpenCode now using an available package manager?"))) throw new Error("OpenCode is required. Install it, reopen the terminal, and retry.");
+    console.log("OpenCode не найден в Windows PATH или WSL.");
+    if (!input.isTTY || !(await askYes("Установить OpenCode доступным способом сейчас?"))) throw new Error("OpenCode необходим. Установите его, откройте новый терминал и повторите команду.");
     const candidates: Array<[string, string]> = [["wsl", "wsl.exe"], ["scoop", "scoop.cmd"], ["choco", "choco.cmd"], ["npm", "npm.cmd"]];
     const selected = candidates.find(([command, executable]) => spawnSync(executable, [command === "wsl" ? "--status" : "--version"], { encoding: "utf8", windowsHide: true, shell: process.platform === "win32" }).status === 0);
     if (!selected) throw new Error("OpenCode could not be installed automatically. Install the 'opencode' command manually; the easiest option is to ask an OpenCode agent to install it for you. You can also use WSL: curl -fsSL https://opencode.ai/install | bash, or 'npm install -g opencode-ai', 'scoop install opencode', or 'choco install opencode'.");
-    console.log(`Installing OpenCode with ${selected[0]}...`);
+    console.log(`Установка OpenCode через ${selected[0]}...`);
     const installArgs = selected[0] === "wsl" ? ["sh", "-lc", "curl -fsSL https://opencode.ai/install | bash"] : selected[0] === "scoop" ? ["install", "opencode"] : selected[0] === "choco" ? ["install", "opencode", "-y"] : ["install", "-g", "opencode-ai"];
     const result = spawnSync(selected[1], installArgs, { encoding: "utf8", windowsHide: false, shell: process.platform === "win32", stdio: "inherit" });
-    if (result.status !== 0 || (!hasOpenCode() && !hasWslOpenCode())) throw new Error("OpenCode installation did not complete. Install the 'opencode' command manually; the easiest option is to ask an OpenCode agent to install it for you, then retry.");
+    if (result.status !== 0 || (!hasOpenCode() && !hasWslOpenCode())) throw new Error("Установка OpenCode не завершилась. Установите команду 'opencode' вручную или попросите OpenCode-агента сделать это, затем повторите команду.");
   }
   return discoverModels();
 }
@@ -261,8 +290,8 @@ async function init(project: string, args: string[]): Promise<void> {
   const force = flag(args, "--force");
   const existingAgents = existsSync(join(project, "AGENTS.md"));
   const existingBriefPath = ["project-brief.md", "PROJECT_BRIEF.md", join("docs", "project-brief.md")].map((name) => join(project, name)).find(existsSync);
-  const agentsSource = normalizeDocumentSource(arg(args, "--agents-source") ?? (customize ? await askChoice("AGENTS.md source:", ["generate with OpenCode", "use existing AGENTS.md", "use base template"]) : "template"), "agents");
-  const briefSource = normalizeDocumentSource(arg(args, "--brief-source") ?? (customize ? await askChoice("Project brief source:", ["generate with OpenCode", "use existing project brief", "use template", "do not create brief"]) : (arg(args, "--brief") ? "use existing project brief" : "do not create brief")), "brief");
+  const agentsSource = normalizeDocumentSource(arg(args, "--agents-source") ?? (customize ? await askChoice("Источник AGENTS.md:", ["сгенерировать через OpenCode", "использовать существующий AGENTS.md", "использовать базовый шаблон"]) : "template"), "agents");
+  const briefSource = normalizeDocumentSource(arg(args, "--brief-source") ?? (customize ? await askChoice("Источник project brief:", ["сгенерировать через OpenCode", "использовать существующий project brief", "использовать шаблон", "не создавать project brief"]) : (arg(args, "--brief") ? "use existing project brief" : "do not create brief")), "brief");
   if (agentsSource === "use existing AGENTS.md" && !existingAgents) throw new Error("No existing AGENTS.md was found.");
   if (briefSource === "use existing project brief" && !arg(args, "--brief") && !existingBriefPath) throw new Error("No existing project brief was found.");
   const existing = [join(project, "AGENTS.md"), join(project, "opencode.json"), join(project, "TASK_STATE.md")].filter(existsSync);
@@ -274,7 +303,7 @@ async function init(project: string, args: string[]): Promise<void> {
   let projectFacts = "";
   let generatedBrief = "";
   const needsAi = agentsSource === "generate with OpenCode" || briefSource === "generate with OpenCode";
-  if (needsAi && !dryRun) { console.log("Analyzing the project with OpenCode (read-only)..."); const generated = generateProjectDocuments(project, agentsSource === "generate with OpenCode" && briefSource === "generate with OpenCode" ? "both" : agentsSource === "generate with OpenCode" ? "agents" : "brief"); projectFacts = generated.agents ?? ""; generatedBrief = generated.brief ?? ""; }
+  if (needsAi && !dryRun) { console.log("Анализ проекта через OpenCode в режиме только чтения..."); const generated = await generateProjectDocuments(project, agentsSource === "generate with OpenCode" && briefSource === "generate with OpenCode" ? "both" : agentsSource === "generate with OpenCode" ? "agents" : "brief"); projectFacts = generated.agents ?? ""; generatedBrief = generated.brief ?? ""; }
   const agentsContent = agentsSource === "use existing AGENTS.md" ? readFileSync(join(project, "AGENTS.md"), "utf8") : generatedInstructions(chosenPreset, brief, catalog.rules, projectFacts);
   const briefContent = briefSource === "use existing project brief" ? readFileSync(resolve(arg(args, "--brief") ?? existingBriefPath!), "utf8") : briefSource === "generate with OpenCode" ? generatedBrief : briefSource === "use template" ? "# Project brief\n\n## Product\n\n## Stack\n\n## Verification\n\n## Constraints\n" : "";
   if (flag(args, "--reinit-delete") && existsSync(join(project, ".opencode")) && !dryRun) rmSync(join(project, ".opencode"), { recursive: true, force: true });
